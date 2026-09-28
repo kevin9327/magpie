@@ -93,6 +93,24 @@ func TestTargets(t *testing.T) {
 	}
 }
 
+// On Windows Crush's crush.json is in %LOCALAPPDATA%\crush, but its CRUSH.md
+// is read from ~/.config/crush, as everywhere else; one beside crush.json is
+// never read.
+func TestCrushInstructionsWhereCrushReadsThem(t *testing.T) {
+	h := sandbox(t)
+	app := filepath.Join(h, "AppData", "Local")
+	t.Setenv("LOCALAPPDATA", app)
+	write(t, filepath.Join(app, "crush", "crush.json"), "")
+	shared := "Use tabs."
+	ok(t)(SaveInstructions(InstructionsChange{Shared: &shared, Agents: []string{"crush"}}))
+	if s := read(t, filepath.Join(h, ".config", "crush", "CRUSH.md")); s != blockBegin+"\nUse tabs.\n"+blockEnd+"\n" {
+		t.Errorf("~/.config/crush/CRUSH.md:\n%q", s)
+	}
+	if _, err := os.Stat(filepath.Join(app, "crush", "CRUSH.md")); !os.IsNotExist(err) {
+		t.Error("a CRUSH.md Crush doesn't read was written beside crush.json")
+	}
+}
+
 // Alma is wired through its API for models only: the library has no place
 // in it, and says so rather than recording it as given anything.
 func TestTakesRefusesAlma(t *testing.T) {

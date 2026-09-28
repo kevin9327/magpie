@@ -134,7 +134,15 @@ func targetOf(a *agent.Agent) *Target {
 		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp-config.json"), Format: fmtCopilot}
 		t.Skills = filepath.Join(d, "skills")
 	case "crush":
-		t.Instructions = filepath.Join(filepath.Dir(a.Path), "CRUSH.md")
+		// Crush reads CRUSH.md from its config folder, ~/.config/crush on
+		// Windows too since Crush 0.14; the crush.json magpie edits there is
+		// %LOCALAPPDATA%\crush's, where Crush keeps its own picks and reads
+		// skills but no CRUSH.md
+		cfg := os.Getenv("XDG_CONFIG_HOME")
+		if cfg == "" {
+			cfg = filepath.Join(h, ".config")
+		}
+		t.Instructions = filepath.Join(cfg, "crush", "CRUSH.md")
 		t.MCP = &mcpFile{Path: a.Path, Format: fmtCrush}
 		t.Skills = filepath.Join(filepath.Dir(a.Path), "skills")
 		t.SkillsAlso = []string{"claude"}
