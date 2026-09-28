@@ -383,8 +383,10 @@ func (l *Library) syncSkills(t *Target, res *Result, all []*Target) {
 		// the folder the library's skill links to is there already: one
 		// brought in from ~/.agents/skills, which stays where it is
 		if ours(p, s.Name) || realDir(p) == realDir(skillDir(s.Name)) {
-			// a copy is made again once the library's skill has changed
-			if t.Copy && ours(p, s.Name) && (linked(p) || !fresh(p, s.Name)) {
+			// a copy is made again once the library's skill has changed: in
+			// an agent that takes copies, and where magpie couldn't link
+			// (Windows without the right to) and left a copy instead
+			if ours(p, s.Name) && ((t.Copy && linked(p)) || (!linked(p) && !fresh(p, s.Name) && hashDir(realDir(skillDir(s.Name))) != "")) {
 				if err := copyIn(p, s.Name); err != nil {
 					res.fail(id, "skill:"+s.Name, err)
 				} else {
