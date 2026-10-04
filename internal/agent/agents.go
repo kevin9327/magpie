@@ -988,17 +988,20 @@ func crush(home, cfg string) *Agent {
 		// %LOCALAPPDATA%\crush is Crush's data folder there
 		data = path
 	}
-	return crushAt(here(home), path)
+	return crushAt(here(home), path, data)
 }
 
 // crushIn is Crush in a WSL distro: ~/.config/crush/crush.json, Linux's
 // place for it.
 func crushIn(at place) *Agent {
-	return crushAt(at, filepath.Join(at.home, ".config", "crush", "crush.json"))
+	// Crush's data file is in Linux's place there too
+	return crushAt(at, filepath.Join(at.home, ".config", "crush", "crush.json"),
+		filepath.Join(at.home, ".local", "share", "crush", "crush.json"))
 }
 
-// crushAt is Crush with its config at path, reaching the gateway as at does.
-func crushAt(at place, path string) *Agent {
+// crushAt is Crush with its config at path and its data file at data,
+// reaching the gateway as at does.
+func crushAt(at place, path, data string) *Agent {
 	provider := func() any { return magpieProviderJSONAt("crush", "crush", at.gw()) }
 	get := func(k string) (string, bool) { return edit.GetJSON(path, k) }
 	set := func(kvs ...edit.KV) error { return edit.SetJSON(path, kvs...) }
