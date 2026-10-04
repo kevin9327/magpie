@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -161,5 +162,62 @@ func TestSkillCopySwapSurvivesAnUndeletableFile(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Fatalf("claude's skills folder: %v", names)
+	}
+}
+
+// An agent in WSL (a t.Copy target) gets its copy made again through the
+// same swap: with a file in its old copy that can't be removed, it still
+// gets the whole new copy, magpie still knows it for its own, and the
+// leftover is cleared by a later sync.
+func TestWSLSkillCopySwapSurvivesAnUndeletableFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only folders don't stop removal on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from a read-only folder")
+	}
+	h := wslSandbox(t)
+	src := filepath.Join(home(), "src", "skills")
+	skill(t, filepath.Join(src, "pdf"), "pdf", "Read PDFs")
+	write(t, filepath.Join(src, "pdf/sub/forms.md"), "forms one")
+	ok(t)(InstallSkills(src, []string{"pdf"}, []string{wslCodex}))
+	p := filepath.Join(h, ".codex/skills/pdf")
+	if linked(p) || !ours(p, "pdf") || read(t, filepath.Join(p, "sub/forms.md")) != "forms one" {
+		t.Fatal("codex@wsl didn't get magpie's copy")
+	}
+	sub := filepath.Join(p, "sub")
+	if err := os.Chmod(sub, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	leftover := filepath.Join(filepath.Dir(p), ".pdf.magpie-old")
+	t.Cleanup(func() {
+		os.Chmod(sub, 0o755)
+		os.Chmod(filepath.Join(leftover, "sub"), 0o755)
+	})
+
+	write(t, filepath.Join(src, "pdf/SKILL.md"), "---\nname: pdf\ndescription: Changed\n---\n")
+	write(t, filepath.Join(src, "pdf/sub/forms.md"), "forms two")
+	res := ok(t)(Sync())
+	if !slices.Contains(res.Changed, wslCodex) {
+		t.Errorf("changed: %v", res.Changed)
+	}
+	if !ours(p, "pdf") {
+		t.Fatal("codex@wsl's copy isn't magpie's after a swap with an undeletable file")
+	}
+	if !strings.Contains(read(t, filepath.Join(p, "SKILL.md")), "Changed") || read(t, filepath.Join(p, "sub/forms.md")) != "forms two" {
+		t.Fatal("codex@wsl's copy wasn't made again whole")
+	}
+	if _, err := os.Lstat(leftover); err != nil {
+		t.Fatalf("the old copy that couldn't be removed: %v", err)
+	}
+
+	// once the file can be removed, the next sync clears what was left
+	os.Chmod(filepath.Join(leftover, "sub"), 0o755)
+	ok(t)(Sync())
+	if _, err := os.Lstat(leftover); !os.IsNotExist(err) {
+		t.Fatalf("the old copy is still there after a sync: %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(p)); len(entries) != 1 {
+		t.Fatalf("codex@wsl's skills folder has %d entries", len(entries))
 	}
 }
