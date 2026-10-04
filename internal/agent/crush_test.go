@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/edit"
@@ -111,5 +114,91 @@ func TestCrushPickInCrushJSON(t *testing.T) {
 	writeFile(t, data, `{"models":{"large":{"model":"m-mine","provider":"mine"}}}`)
 	if got := cr.Field("model").Get(); got != "mine/m-mine" {
 		t.Fatalf("large reads %q, not the pick Crush uses", got)
+	}
+}
+
+// Crush's picker saves the whole model object in its data file: the model
+// and the settings it picked for that model. A model magpie picks takes the
+// whole object's place, so none of those settings ride along to it (a
+// max_tokens meant for another model would go upstream with magpie's), and
+// magpie's effort row doesn't show an effort magpie never set.
+func TestCrushPickReplacesCrushsModelObject(t *testing.T) {
+	home, data := crushHome(t)
+	cr := crush(home, filepath.Join(home, ".config"))
+	writeFile(t, data, `{
+  "models": {
+    "large": {"model":"gpt-5","provider":"openai","reasoning_effort":"medium","max_tokens":128000,"think":true,"temperature":0.2,"top_p":0.9,"provider_options":{"x":1}},
+    "small": {"model":"gpt-5-mini","provider":"openai","max_tokens":4096,"think":true}
+  },
+  "providers": {"openai": {"api_key": "sk-keep"}},
+  "recent_models": {"large": [{"model":"gpt-5","provider":"openai"}]}
+}`)
+
+	if err := cr.Field("model").Set("magpie/deepseek/pro"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cr.Field("small").Set("magpie/deepseek/flash"); err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{"large", "small"} {
+		raw, _ := edit.GetJSON(data, "models."+typ)
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+			t.Fatalf("models.%s: %v\n%s", typ, err, readFile(data))
+		}
+		if len(obj) != 2 || obj["provider"] != "magpie" {
+			t.Fatalf("models.%s after magpie's pick: %s", typ, raw)
+		}
+	}
+	if e := cr.Field("effort").Get(); e != "" {
+		t.Fatalf("effort row shows %q, which magpie never set", e)
+	}
+	// the rest of the data file is Crush's and stays
+	if k, _ := edit.GetJSON(data, "providers.openai.api_key"); k != "sk-keep" {
+		t.Fatalf("api key gone:\n%s", readFile(data))
+	}
+	if _, ok := edit.GetJSON(data, "recent_models.large"); !ok {
+		t.Fatalf("recent_models gone:\n%s", readFile(data))
+	}
+
+	// an effort magpie set stays with its next pick on magpie
+	if err := cr.Field("effort").Set("high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cr.Field("model").Set("magpie/deepseek/max"); err != nil {
+		t.Fatal(err)
+	}
+	if e := cr.Field("effort").Get(); e != "high" {
+		t.Fatalf("magpie's own effort %q after a new pick:\n%s", e, readFile(data))
+	}
+
+	// once Crush's picker has saved its own object again, magpie's next pick
+	// drops all of it, the effort Crush saved too
+	writeFile(t, data, `{"models":{"large":{"model":"deepseek/pro","provider":"magpie","reasoning_effort":"low","max_tokens":64000}}}`)
+	if err := cr.Field("model").Set("magpie/deepseek/max"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := edit.GetJSON(data, "models.large"); strings.Contains(raw, "max_tokens") || strings.Contains(raw, "reasoning_effort") {
+		t.Fatalf("Crush's settings ride along: %s", raw)
+	}
+}
+
+// Crush keeps API keys in its data file, so when magpie is first to make it
+// the file is readable by its owner only.
+func TestCrushDataFileMadePrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no unix permission bits")
+	}
+	home, data := crushHome(t)
+	cr := crush(home, filepath.Join(home, ".config"))
+	if err := cr.Field("model").Set("magpie/deepseek/pro"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Fatalf("data file mode %v", st.Mode().Perm())
 	}
 }

@@ -2,7 +2,9 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,6 +146,37 @@ func pairGet(get func(string) (string, bool), pKey, mKey string) func() string {
 		}
 		return p + "/" + m
 	}
+}
+
+// magpieEffort is the reasoning_effort of the models.<type> object obj in
+// Crush's data file when magpie set it: the object names magpie's provider
+// and has no field but provider, model and reasoning_effort, which is all
+// magpie ever writes there. An object Crush's picker saved is not magpie's.
+func magpieEffort(data, obj, magpieID string) (string, bool) {
+	raw, ok := edit.GetJSON(data, obj)
+	if !ok {
+		return "", false
+	}
+	var cur map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &cur) != nil {
+		return "", false
+	}
+	var prov, effort string
+	for k, v := range cur {
+		switch k {
+		case "provider":
+			json.Unmarshal(v, &prov)
+		case "model":
+		case "reasoning_effort":
+			json.Unmarshal(v, &effort)
+		default:
+			return "", false
+		}
+	}
+	if prov != magpieID || effort == "" {
+		return "", false
+	}
+	return effort, true
 }
 
 func pairSet(set func(...edit.KV) error, pKey, mKey string) func(string) error {
@@ -975,7 +1008,19 @@ func crushAt(at place, path string) *Agent {
 		}
 		return get(k)
 	}
-	setPick := func(kvs ...edit.KV) error { return edit.SetJSON(data, kvs...) }
+	setPick := func(kvs ...edit.KV) error {
+		// Crush keeps API keys in its data file, so one magpie is first to
+		// make is made readable by its owner only
+		if _, err := os.Lstat(data); errors.Is(err, fs.ErrNotExist) {
+			if err := os.MkdirAll(filepath.Dir(data), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(data, []byte("{}\n"), 0o600); err != nil {
+				return err
+			}
+		}
+		return edit.SetJSON(data, kvs...)
+	}
 	delPick := func(k string) error {
 		if err := edit.DelJSON(data, k); err != nil {
 			return err
@@ -1000,8 +1045,31 @@ func crushAt(at place, path string) *Agent {
 			return append(ownOptions("", cur[key], extra...), viaMagpie("crush", magpieID+"/")...)
 		}
 	}
+	// replacePick puts v in place of the whole models.<type> object in the
+	// data file. Crush's own picker saves its per-model settings there
+	// (max_tokens, think, reasoning_effort, sampling, provider_options),
+	// and Crush applies them to whatever model the object names, so they
+	// must not stay attached to the model magpie picks: a max_tokens meant
+	// for another model can go upstream as an over-limit request. Only an
+	// effort magpie set itself is kept: one on the large pick when that pick
+	// is already magpie's and carries nothing Crush adds.
+	replacePick := func(obj string) func(string) error {
+		return func(v string) error {
+			p, m, ok := strings.Cut(v, "/")
+			if !ok || p == "" || m == "" {
+				return fmt.Errorf("expected provider/model, got %q", v)
+			}
+			next := map[string]any{"provider": p, "model": m}
+			if obj == "models.large" {
+				if e, ok := magpieEffort(data, obj, magpieID); ok {
+					next["reasoning_effort"] = e
+				}
+			}
+			return setPick(edit.KV{Path: obj, Value: next})
+		}
+	}
 	setter := func(pKey, mKey string) func(string) error {
-		pair := pairSet(setPick, pKey, mKey)
+		pair := replacePick(strings.TrimSuffix(pKey, ".provider"))
 		return func(v string) error {
 			if v == "" {
 				if err := delPick(strings.TrimSuffix(pKey, ".provider")); err != nil {
