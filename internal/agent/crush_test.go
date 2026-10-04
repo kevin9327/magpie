@@ -202,3 +202,43 @@ func TestCrushDataFileMadePrivate(t *testing.T) {
 		t.Fatalf("data file mode %v", st.Mode().Perm())
 	}
 }
+
+// Crush in a WSL distro has the same data file over its crush.json, in the
+// distro's home: <distro home>/.local/share/crush/crush.json, whatever
+// Windows' own XDG_DATA_HOME or LOCALAPPDATA say. A pick made in magpie goes
+// there and is read back from there.
+func TestCrushInWSLPicksInTheDistrosDataFile(t *testing.T) {
+	home, _ := crushHome(t)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "windows-data"))
+	root := t.TempDir()
+	d := distro{Name: "Ubuntu", Home: "/home/me", Root: root, Running: true, Mirrored: true}
+	cr := crushIn(d.place("crush@wsl:Ubuntu"))
+	data := d.local("/home/me/.local/share/crush/crush.json")
+	if want := d.local("/home/me/.config/crush/crush.json"); cr.Path != want {
+		t.Fatalf("config %s, want %s", cr.Path, want)
+	}
+	writeFile(t, data, `{"models":{"large":{"model":"m-mine","provider":"mine"}}}`)
+
+	large := cr.Field("model")
+	if got := large.Get(); got != "mine/m-mine" {
+		t.Fatalf("large reads %q, not the pick in the distro's data file", got)
+	}
+	if err := large.Set("magpie/deepseek/pro"); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := edit.GetJSON(data, "models.large.provider"); p != "magpie" {
+		t.Fatalf("the distro's Crush still picks %q:\n%s", p, readFile(data))
+	}
+	if got := large.Get(); got != "magpie/deepseek/pro" {
+		t.Fatalf("large reads %q", got)
+	}
+	for _, other := range []string{
+		filepath.Join(home, "windows-data", "crush", "crush.json"),
+		filepath.Join(home, ".local", "share", "crush", "crush.json"),
+		filepath.Join(home, "AppData", "Local", "crush", "crush.json"),
+	} {
+		if _, err := os.Stat(other); err == nil {
+			t.Fatalf("the distro's pick went to this machine's %s", other)
+		}
+	}
+}
