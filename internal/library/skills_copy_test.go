@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -62,6 +63,97 @@ func TestSkillCopyFollowsTheLibrary(t *testing.T) {
 	ok(t)(Sync())
 	if s := read(t, filepath.Join(p, "forms.md")); s != "forms three" {
 		t.Fatalf("forms.md after a sync: %q", s)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(p)); len(entries) != 1 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("claude's skills folder: %v", names)
+	}
+}
+
+// Remaking a copy must never strand it half-removed: when a file in the old
+// copy can't be removed (held open on Windows; a read-only folder here), the
+// agent still gets the whole new copy, magpie still knows it for its own, and
+// what's left of the old one is removed on a later sync.
+func TestSkillCopySwapSurvivesAnUndeletableFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only folders don't stop removal on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can remove files from a read-only folder")
+	}
+	h := sandbox(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(tarball(t, map[string]string{
+			"skills/pdf/SKILL.md": "---\nname: pdf\ndescription: PDFs one\n---\n",
+		}))
+	}))
+	defer srv.Close()
+	old := tarballURL
+	tarballURL = func(repo, ref string) string { return srv.URL + "/" + repo + "/" + ref }
+	defer func() { tarballURL = old }()
+
+	ok(t)(InstallSkills("owner/repo", []string{"skills/pdf"}, []string{"claude"}))
+	p := filepath.Join(h, ".claude/skills/pdf")
+	// a skill with a folder in it, the folder holding the file that will stick
+	if err := os.MkdirAll(filepath.Join(skillDir("pdf"), "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(skillDir("pdf"), "sub/forms.md"), "forms one")
+	if fi, err := os.Lstat(p); err != nil {
+		t.Fatal(err)
+	} else if fi.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+		if err := copyDir(skillDir("pdf"), p); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(p, marker), "copied from "+skillDir("pdf")+"\n")
+	}
+	// sub/forms.md in the agent's copy can't be removed
+	sub := filepath.Join(p, "sub")
+	if err := os.Chmod(sub, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	stuck := []string{}
+	t.Cleanup(func() {
+		for _, d := range append(stuck, sub) {
+			os.Chmod(d, 0o755)
+		}
+	})
+
+	write(t, filepath.Join(skillDir("pdf"), "SKILL.md"), "---\nname: pdf\ndescription: PDFs two\n---\n")
+	write(t, filepath.Join(skillDir("pdf"), "sub/forms.md"), "forms two")
+	ok(t)(Sync())
+	if !ours(p, "pdf") {
+		t.Fatal("the copy isn't magpie's after a swap with an undeletable file")
+	}
+	if s := read(t, filepath.Join(p, "SKILL.md")); !strings.Contains(s, "PDFs two") {
+		t.Fatalf("claude's copy after the update:\n%s", s)
+	}
+	if s := read(t, filepath.Join(p, "sub/forms.md")); s != "forms two" {
+		t.Fatalf("sub/forms.md after the update: %q", s)
+	}
+	leftover := filepath.Join(filepath.Dir(p), ".pdf.magpie-old")
+	if _, err := os.Lstat(leftover); err != nil {
+		t.Fatalf("the old copy that couldn't be removed: %v", err)
+	}
+	stuck = append(stuck, filepath.Join(leftover, "sub"))
+
+	// a later sync still knows the copy and is not refused
+	ok(t)(Sync())
+	if !ours(p, "pdf") {
+		t.Fatal("the copy isn't magpie's on the next sync")
+	}
+
+	// once the file can be removed, the next sync clears what was left
+	os.Chmod(filepath.Join(leftover, "sub"), 0o755)
+	ok(t)(Sync())
+	if _, err := os.Lstat(leftover); !os.IsNotExist(err) {
+		t.Fatalf("the old copy is still there after a sync: %v", err)
 	}
 	if entries, _ := os.ReadDir(filepath.Dir(p)); len(entries) != 1 {
 		var names []string

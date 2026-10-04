@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -164,6 +165,8 @@ func copyIn(p, name string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
+	// an old copy a previous swap couldn't remove is tried again
+	dropOld(p, name)
 	next := filepath.Join(filepath.Dir(p), "."+name+".magpie-next")
 	os.RemoveAll(next)
 	if err := copyDir(realDir(lib), next); err != nil {
@@ -174,11 +177,81 @@ func copyIn(p, name string) error {
 		os.RemoveAll(next)
 		return err
 	}
-	if err := unlink(p); err != nil {
+	fi, err := os.Lstat(p)
+	if err != nil || !fi.IsDir() {
+		// nothing there yet, or a link, which goes in one step
+		if err := unlink(p); err != nil {
+			os.RemoveAll(next)
+			return err
+		}
+		return os.Rename(next, p)
+	}
+	// The old copy is moved aside whole before the new one goes in, and only
+	// then removed: removing it in place can fail part-way (a file held open
+	// on Windows), which would leave the agent a copy with no SKILL.md and no
+	// marker that magpie no longer knows for its own.
+	old := oldPath(p, name)
+	if err := os.Rename(p, old); err != nil {
 		os.RemoveAll(next)
 		return err
 	}
-	return os.Rename(next, p)
+	if err := os.Rename(next, p); err != nil {
+		// put the old copy back, so the agent keeps a whole skill
+		if back := os.Rename(old, p); back != nil {
+			return errors.Join(err, back)
+		}
+		os.RemoveAll(next)
+		return err
+	}
+	// best effort: what's left is tried again on the next sync
+	os.RemoveAll(old)
+	return nil
+}
+
+// oldPrefix starts the name an old copy of a skill is moved aside to while
+// the new one is put in its place.
+func oldPrefix(name string) string { return "." + name + ".magpie-old" }
+
+// oldPath is a free name beside p to move the old copy of a skill aside to.
+func oldPath(p, name string) string {
+	dir := filepath.Dir(p)
+	for i := 0; ; i++ {
+		o := filepath.Join(dir, oldPrefix(name))
+		if i > 0 {
+			o += "-" + strconv.Itoa(i)
+		}
+		if _, err := os.Lstat(o); errors.Is(err, fs.ErrNotExist) {
+			return o
+		}
+	}
+}
+
+// dropOld removes, best effort, the old copies of a skill earlier swaps
+// moved aside beside p but couldn't remove.
+func dropOld(p, name string) {
+	es, err := os.ReadDir(filepath.Dir(p))
+	if err != nil {
+		return
+	}
+	pre := oldPrefix(name)
+	for _, e := range es {
+		n := e.Name()
+		if n == pre || (strings.HasPrefix(n, pre+"-") && isDigits(n[len(pre)+1:])) {
+			os.RemoveAll(filepath.Join(filepath.Dir(p), n))
+		}
+	}
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // fresh is whether the copy at p holds what the library's skill does.
@@ -361,6 +434,7 @@ func (l *Library) syncSkills(t *Target, res *Result, all []*Target) {
 			mine = append(mine, name)
 			continue
 		}
+		dropOld(p, name)
 		res.changed(id)
 	}
 	for _, s := range l.Skills {
@@ -383,6 +457,10 @@ func (l *Library) syncSkills(t *Target, res *Result, all []*Target) {
 		// the folder the library's skill links to is there already: one
 		// brought in from ~/.agents/skills, which stays where it is
 		if ours(p, s.Name) || realDir(p) == realDir(skillDir(s.Name)) {
+			// an old copy a previous swap couldn't remove is tried again
+			if ours(p, s.Name) {
+				dropOld(p, s.Name)
+			}
 			// a copy is made again once the library's skill has changed: in
 			// an agent that takes copies, and where magpie couldn't link
 			// (Windows without the right to) and left a copy instead
