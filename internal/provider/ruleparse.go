@@ -27,7 +27,7 @@ func ParseTokens(v string) (int, error) {
 		return 0, fmt.Errorf("tokens %q is not a length (200000, 200k, 1m)", v)
 	}
 	n := f * mul
-	if n > float64(math.MaxInt) {
+	if n >= float64(math.MaxInt) {
 		return 0, fmt.Errorf("tokens %q is not a length (200000, 200k, 1m)", v)
 	}
 	return int(n), nil
