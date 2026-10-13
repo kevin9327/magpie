@@ -1005,7 +1005,14 @@ func piLikeKeyed(at place, id, name, dir string, key func() string) *Agent {
 				"baseUrl", at.v1(), "apiKey", key())
 		},
 		Sync: func() error {
-			return syncJSON(modelsPath, "providers."+magpieID, block)
+			listed := piListed(modelsPath)
+			if err := syncJSON(modelsPath, "providers."+magpieID, block); err != nil {
+				return err
+			}
+			// a model deselected or gone from the catalog leaves
+			// providers.magpie.models, and its magpie/ entry in
+			// enabledModels would name nothing (#2055)
+			return piScopeDrop(path, listed, piListed(modelsPath))
 		},
 		// a provider renamed takes its magpie/<id>/ entries in enabledModels
 		// with it: an entry left on the old id names nothing, and Pi would

@@ -90,6 +90,66 @@ func piScopeWithout(settings string) error {
 	return edit.SetJSON(settings, edit.KV{Path: "enabledModels", Value: kept})
 }
 
+// piListed is the ids of the models providers.magpie in a Pi models.json
+// lists, lowercased; nil when there is no such list.
+func piListed(models string) map[string]bool {
+	raw, ok := edit.GetJSON(models, "providers."+magpieID+".models")
+	if !ok {
+		return nil
+	}
+	var listed []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal([]byte(raw), &listed) != nil {
+		return nil
+	}
+	ids := map[string]bool{}
+	for _, m := range listed {
+		ids[strings.ToLower(m.ID)] = true
+	}
+	return ids
+}
+
+// piScopeDrop takes out of Pi's enabledModels the magpie/<model> entries,
+// a :level after them or not, of the models magpie listed before (was) and
+// no longer lists (now), where they would name nothing and Pi warns of
+// each. Globs, other providers' entries and magpie/ entries magpie never
+// listed are the user's and stay. A list left with nothing is removed.
+func piScopeDrop(settings string, was, now map[string]bool) error {
+	gone := false
+	for id := range was {
+		if !now[id] {
+			gone = true
+			break
+		}
+	}
+	if !gone || now == nil {
+		return nil
+	}
+	pats := piScope(settings)
+	if pats == nil {
+		return nil
+	}
+	kept := slices.DeleteFunc(slices.Clone(pats), func(p string) bool {
+		if strings.ContainsAny(p, "*?[") {
+			return false
+		}
+		p = strings.TrimSpace(p)
+		if i := strings.LastIndex(p, ":"); i >= 0 && slices.Contains(piLevels, p[i+1:]) {
+			p = p[:i]
+		}
+		id, ok := strings.CutPrefix(strings.ToLower(p), magpieID+"/")
+		return ok && was[id] && !now[id]
+	})
+	switch {
+	case len(kept) == len(pats):
+		return nil
+	case len(kept) == 0:
+		return edit.DelJSON(settings, "enabledModels")
+	}
+	return edit.SetJSON(settings, edit.KV{Path: "enabledModels", Value: kept})
+}
+
 // piStartup is the model a new Pi session starts on, as the model field
 // shows it: the default when enabledModels takes it in (or there is no such
 // list), else the list's first entry when that names one model outright.

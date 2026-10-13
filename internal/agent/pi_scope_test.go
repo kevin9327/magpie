@@ -201,3 +201,38 @@ func TestPiEnabledModelsFollowRename(t *testing.T) {
 		})
 	}
 }
+
+// A model deselected from a provider leaves providers.magpie.models at the
+// next sync, and its magpie/ entry leaves enabledModels with it, where Pi
+// warned "No models match pattern" for it. Globs, other providers' entries
+// and the models still listed stay (#2055).
+func TestPiEnabledModelsFollowDeselect(t *testing.T) {
+	home := syncHome(t)
+	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro", "flash"}}); err != nil {
+		t.Fatal(err)
+	}
+	settings := filepath.Join(home, ".pi", "agent", "settings.json")
+	os.MkdirAll(filepath.Dir(settings), 0o755)
+	os.WriteFile(settings, []byte(`{
+  // the user's own
+  "enabledModels": ["xai/grok-4.6:high", "magpie/deepseek/flash:low", "magpie/deepseek/*", "magpie/deepseek/pro"],
+  "defaultProvider": "xai",
+  "defaultModel": "grok-4.6"
+}
+`), 0o644)
+	a := pi(home)
+	if err := a.Apply("model", "magpie/deepseek/pro"); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro"}}); err != nil {
+		t.Fatal(err)
+	}
+	SyncCatalog()
+	want := `["xai/grok-4.6:high","magpie/deepseek/*","magpie/deepseek/pro"]`
+	if got := strings.Join(strings.Fields(mustGet(t, settings, "enabledModels")), ""); got != want {
+		t.Errorf("enabledModels = %s, want %s", got, want)
+	}
+	if !strings.Contains(readFile(settings), "// the user's own") {
+		t.Errorf("comment lost: %s", readFile(settings))
+	}
+}
