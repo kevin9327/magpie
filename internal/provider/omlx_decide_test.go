@@ -132,3 +132,52 @@ func TestOMLXWithoutDecisionModels(t *testing.T) {
 		t.Fatalf("Jev: %q", p.Jev())
 	}
 }
+
+// A decision model the user gave an alias in oMLX is listed by the alias,
+// but oMLX answers to its own id too, so a System One request naming that
+// id reaches it as asked instead of being refused before it is forwarded
+// (#2577, ObsidianArch02). The picker still offers it once, by its alias.
+func TestOMLXDecisionModelByItsOwnID(t *testing.T) {
+	h := t.TempDir()
+	t.Setenv("HOME", h)
+	t.Setenv("USERPROFILE", h)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	base, asked := fakeOMLX(t)
+	if err := Save(Provider{ID: "omlx", Name: "oMLX", Preset: OMLXPreset,
+		Chat: base + "/v1", Responses: base + "/v1", Anthropic: base}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := Find("omlx")
+	if _, err := p.Fetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = Find("omlx")
+
+	if !p.DecidesModel("OpenJev-27B-4bit") || !p.DecidesModel("router") {
+		t.Fatal("the aliased model is not decided by both of its names")
+	}
+	// a hidden model's id is still no name of a decision model
+	if p.DecidesModel("clef-oQ4e") {
+		t.Fatal("a hidden model is decided")
+	}
+	for _, name := range []string{"omlx/OpenJev-27B-4bit", "OpenJev-27B-4bit"} {
+		q, m, err := RouteDecider(name)
+		if err != nil || q.ID != "omlx" || m != "OpenJev-27B-4bit" {
+			t.Fatalf("%s routed to %s %q: %v", name, q.ID, m, err)
+		}
+		if err := q.AskSystemOne(context.Background(), m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := asked(); !slices.Equal(got, []string{"OpenJev-27B-4bit", "OpenJev-27B-4bit"}) {
+		t.Fatalf("asked: %v", got)
+	}
+	var deciders []string
+	for _, e := range Deciders() {
+		deciders = append(deciders, e.ID)
+	}
+	if !slices.Equal(deciders, []string{"omlx/clef-flash-oQ4e", "omlx/router"}) {
+		t.Fatalf("deciders: %v", deciders)
+	}
+}

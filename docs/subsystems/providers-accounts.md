@@ -101,7 +101,10 @@ Clef, Clef-Flash and OpenJev among its chat models with nothing to tell them
 apart, so its decision models are the ones its `/v1/models/status` gives
 `model_type` `decision`, by the name `/v1/models` uses (its alias), kept under
 `<id>.decisions` like OpenRouter's (`omlxDecides`, `listedOMLXDecide` in
-[`omlx_decide.go`](../../internal/provider/omlx_decide.go)). MLX-Serve marks
+[`omlx_decide.go`](../../internal/provider/omlx_decide.go)). oMLX answers to
+a model's own id beside its alias, so that id is kept as the model's `Also`, and
+a System One request naming either reaches the model by the name it gave
+(`namesModel` in [`decide.go`](../../internal/provider/decide.go), #2577). MLX-Serve marks
 them in its `/v1/models` with `capabilities: ["decisions"]`, kept under
 `<id>.decisions` (`mlxServeDecides`, `listedMLXServeDecide` in
 [`mlxserve_decide.go`](../../internal/provider/mlxserve_decide.go)). A server

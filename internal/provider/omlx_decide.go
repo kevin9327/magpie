@@ -30,7 +30,8 @@ func omlxDecisions(base string) string {
 }
 
 // listedOMLXDecide are the decision models in oMLX's /v1/models/status,
-// each by the name /v1/models gives it (its alias, if it has one) and with
+// each by the name /v1/models gives it (its alias, if it has one, with its
+// own id kept as the other name oMLX answers to) and with
 // the window oMLX serves it with. One the user hid in oMLX is left out, as
 // /v1/models leaves it out. Clef and OpenJev both read images.
 func listedOMLXDecide(b []byte) ([]catalog.Model, error) {
@@ -53,16 +54,16 @@ func listedOMLXDecide(b []byte) ([]catalog.Model, error) {
 		if m.ID == "" || m.Hidden || m.ModelType != "decision" && m.EngineType != "decision" {
 			continue
 		}
-		id := m.ID
+		id, also := m.ID, ""
 		if m.Alias != "" {
-			id = m.Alias
+			id, also = m.Alias, m.ID
 		}
 		images := true
 		ctx := m.MaxContextWindow
 		if ctx <= 0 {
 			ctx = m.ContextLength
 		}
-		ms = append(ms, catalog.Model{ID: id, Name: id, Context: ctx, ImageInput: &images, Images: true})
+		ms = append(ms, catalog.Model{ID: id, Name: id, Also: also, Context: ctx, ImageInput: &images, Images: true})
 	}
 	return ms, nil
 }

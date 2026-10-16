@@ -96,7 +96,7 @@ func (p Provider) DecidesModel(model string) bool {
 	}
 	if p.IsRemoteMagpie() || p.listsDecisions() {
 		// OpenRouter's Jev Router (typesafe/jev-router) is a chat model
-		return slices.ContainsFunc(p.decideListed(), func(m catalog.Model) bool { return m.ID == model })
+		return slices.ContainsFunc(p.decideListed(), func(m catalog.Model) bool { return namesModel(m, model) })
 	}
 	return jevID(model) || p.DecideVia() == ViaCloudflare && CloudflareClef(model)
 }
@@ -731,7 +731,7 @@ func resolveDecideModel(p Provider, name string) (string, bool) {
 		return "", false
 	}
 	for _, m := range p.decideModels() {
-		if m.ID == name {
+		if namesModel(m, name) {
 			return name, true
 		}
 	}
@@ -743,6 +743,12 @@ func resolveDecideModel(p Provider, name string) (string, bool) {
 		return p.Jev(), true
 	}
 	return "", false
+}
+
+// namesModel reports whether name is m's: its id, or the other name its
+// server answers to (an oMLX model's own id beside its alias, #2577).
+func namesModel(m catalog.Model, name string) bool {
+	return m.ID == name || m.Also != "" && m.Also == name
 }
 
 // deciderByID is the decision provider whose id is id, on or off.

@@ -71,6 +71,10 @@ type Model struct {
 	// provider after it (magpie_label): the name Provider in model names
 	// Off has here (ARNO on Discord).
 	Plain string `json:",omitempty"`
+	// Also is another name the model's server answers to: an oMLX
+	// decision model listed by the alias the user gave it is still asked by
+	// its own id, which oMLX accepts too (#2577).
+	Also string `json:",omitempty"`
 	// Fast is set on a model Codex may ask for priority processing (its
 	// Fast mode): one a ChatGPT account serves.
 	Fast bool `json:",omitempty"`
